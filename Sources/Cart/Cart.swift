@@ -80,7 +80,7 @@ open class Cart<T: ProductProtocol> {
     open var amount: Double {
         var total: Double = 0
         for item in itemsDataSource {
-            total += (item.product.price.toDouble() * Double(item.quantity))
+            total += (item.product.price * Double(item.quantity))
         }
         return total
     }
