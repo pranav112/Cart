@@ -16,18 +16,51 @@
 //    OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 import Foundation
+import RxSwift
+import RxCocoa
 
 /// An object that coordinate the products to sell.
 open class Cart<T: ProductProtocol> {
     
+    static func shared() -> Cart<T> { return Cart<T>() }
+    private init() {
+        self.seedCart()
+        self.setUpObservers()
+    }
+    
     /// Describes the product and quantity.
-    public typealias Item = (product: T, quantity: Int)
+    public struct Item: Codable {
+        var product: T
+        var quantity: Int
+    }
+    //public typealias Item = (product: T, quantity: Int)
+    
+    private let disposeBag = DisposeBag()
+    private func setUpObservers() {
+        NotificationCenter.default.rx.notification(UIApplication.willResignActiveNotification)
+            .subscribe(onNext: { [weak self] _ in
+                self?.persistCart()
+            })
+            .disposed(by: self.disposeBag)
+        
+    }
+    
+    private func seedCart() {
+        if let data = UserDefaults.standard.value(forKey: Constants.UserDefaultsKeys.cart) as? Data,
+        let items = try? PropertyListDecoder().decode([Item].self, from: data) {
+            self.items.accept(items)
+        }
+    }
+    
+    private func persistCart() {
+        UserDefaults.standard.set(try? PropertyListEncoder().encode(self.itemsDataSource), forKey: Constants.UserDefaultsKeys.cart)
+    }
 
     /// Counts the number of items without regard to quantity of each one.
     /// Use this to know the number of items in a list, e.g. To get the number of rows in a table view.
     public var count: Int {
         get {
-            return items.count
+            return itemsDataSource.count
         }
     }
 
@@ -36,7 +69,7 @@ open class Cart<T: ProductProtocol> {
     public var countQuantities: Int {
         get {
             var numberOfProducts = 0
-            for item in items {
+            for item in itemsDataSource {
                 numberOfProducts += item.quantity
             }
             return numberOfProducts
@@ -46,24 +79,23 @@ open class Cart<T: ProductProtocol> {
     /// The amount to charge.
     open var amount: Double {
         var total: Double = 0
-        for item in items {
-            total += (item.product.price * Double(item.quantity))
+        for item in itemsDataSource {
+            total += (item.product.price.toDouble() * Double(item.quantity))
         }
         return total
     }
 
-    /// The delegate to communicate the changes.
-    public var delegate: CartDelegate?
-
     /// The list of products to sell.
-    private var items = [Item]()
-
-    /// Public init
-    public init() {}
-
+    private let items = BehaviorRelay<[Item]>(value: [])
+    var itemsObservable: Observable<[Item]> {
+        return items.asObservable()
+    }
+    var itemsDataSource: [Item] {
+        return items.value
+    }
     /// Gets the item at index.
     public subscript(index: Int) -> Item {
-        return items[index]
+        return itemsDataSource[index]
     }
 
     /// Adds a product to the items.
@@ -73,18 +105,16 @@ open class Cart<T: ProductProtocol> {
     /// - parameter quantity: How many times will add the products. Default is 1.
     ///
     public func add(_ product: T, quantity: Int = 1) {
+        var items = itemsDataSource
         for (index, item) in items.enumerated() {
             if product == item.product {
                 items[index].quantity += quantity
-
-                delegate?.cart(self, itemsDidChangeWithType: .increment(at: index))
+                self.items.accept(items)
                 return
             }
         }
-
-        items.append((product: product, quantity: quantity))
-
-        delegate?.cart(self, itemsDidChangeWithType: .add(at: (items.count - 1)))
+        items.append(Item(product: product, quantity: quantity))
+        self.items.accept(items)
     }
 
     /// Increments the quantity of an item at index in 1.
@@ -92,8 +122,9 @@ open class Cart<T: ProductProtocol> {
     /// - parameter index: The index of the product to increment.
     ///
     public func increment(at index: Int) {
+        var items = itemsDataSource
         items[index].quantity += 1
-        delegate?.cart(self, itemsDidChangeWithType: .increment(at: index))
+        self.items.accept(items)
     }
 
     /// Increments the quantity of the product item.
@@ -101,7 +132,7 @@ open class Cart<T: ProductProtocol> {
     /// - parameter product: The product to increment the quantity.
     ///
     public func increment(_ product: T)  {
-        for (index, item) in items.enumerated() {
+        for (index, item) in itemsDataSource.enumerated() {
             if product == item.product {
                 increment(at: index)
                 break
@@ -114,9 +145,10 @@ open class Cart<T: ProductProtocol> {
     /// - parameter index: The index of the product to reduce.
     ///
     public func decrement(at index: Int) {
+        var items = itemsDataSource
         if items[index].quantity > 1 {
             items[index].quantity -= 1
-            delegate?.cart(self, itemsDidChangeWithType: .decrement(at: index))
+            self.items.accept(items)
         } else {
             remove(at: index)
         }
@@ -127,7 +159,7 @@ open class Cart<T: ProductProtocol> {
     /// - parameter product:  The product to reduce the quantity.
     ///
     public func decrement(_ product: T)  {
-        for (index, item) in items.enumerated() {
+        for (index, item) in itemsDataSource.enumerated() {
             if product == item.product {
                 decrement(at: index)
                 break
@@ -140,15 +172,13 @@ open class Cart<T: ProductProtocol> {
     /// - parameter index: The index of the product to remove.
     ///
     public func remove(at index: Int) {
+        var items = itemsDataSource
         items.remove(at: index)
-
-        delegate?.cart(self, itemsDidChangeWithType: .delete(at: index))
+        self.items.accept(items)
     }
 
     /// Removes all products from the items list.
     open func clean() {
-        items.removeAll()
-
-        delegate?.cart(self, itemsDidChangeWithType: .clean)
+        self.items.accept([])
     }
 }
